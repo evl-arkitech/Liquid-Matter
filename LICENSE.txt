@@ -1,0 +1,33 @@
+========================================================================
+                      THE EVL PUBLIC LICENSE (EPL)
+                          Version 1.0, July 2026
+========================================================================
+
+Copyright (c) 2026 EVL Software. All rights reserved.
+
+This license governs the use, modification, and distribution of the 
+Liquid Matter Engine, Compiler, and associated tools.
+
+1. FREE FOR DEVELOPMENT
+You are granted a non-exclusive, worldwide, royalty-free license to 
+download, install, modify, and use the Liquid Matter Engine for 
+educational, personal, and commercial prototyping purposes.
+
+2. THE 1% ROYALTY CLAUSE
+Upon the commercial release and monetization of any software, game, 
+or product built using the Liquid Matter Engine, the Creator agrees 
+to remit a 1% royalty to EVL Software. 
+Specifically: $1.00 USD for every $100.00 USD of gross revenue generated.
+
+3. NO HIDDEN FEES
+There are no installation fees, subscription costs, or per-seat 
+licenses required to use Liquid Matter. If your product does not 
+generate revenue, you owe nothing.
+
+4. LIMITATION OF LIABILITY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+By using the Liquid Matter Engine, you agree to these terms.
+========================================================================
