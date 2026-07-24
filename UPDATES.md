@@ -20,3 +20,5 @@
       variables.
       ΓÇó Windows CP1252 Fix: Resolved Unicode block ASCII printing issues in water.py.
       ΓÇó Async Thread Life Cycle: Async tasks spawned by async perform are tracked by the evaluator.
+  6. updated vs code extension to V3. Microsoft Installer will we available soon!
+  7. 
