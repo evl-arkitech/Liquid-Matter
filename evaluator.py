@@ -1,3 +1,6 @@
+import webbrowser
+import tempfile
+import os
 import os
 import subprocess
 import urllib.request
@@ -6,15 +9,29 @@ import json
 import threading
 import os
 import re
-from parser import SetStatement, AddStatement, SubtractStatement, MultiplyStatement, DivideStatement, DisplayStatement, NumberNode, IdentifierNode, StringNode, FunctionDefNode, FunctionCallNode, IntentionNode, IfNode, RepeatNode, CompileNode, TestProductionNode, ContainerNode, TriggerContainerNode, ReadFileNode, WriteFileNode, FetchNode, SpawnNode, BindNode, MoveNode, CollisionNode, AttemptNode, QueryNode, ParseJsonNode, GetNode, ForEachNode, AsyncNode, LoadSecretsNode, GetSecretNode, PaintNode, ShapeNode, BreakpointNode, InputNode, CreateListNode, AppendListNode, ReturnNode, OnUpdateNode, RandomNode
+from parser import AST, BinaryOpNode, UnaryOpNode, CreateDictionaryNode, SetDictKeyNode, SetStatement, AddStatement, SubtractStatement, MultiplyStatement, DivideStatement, DisplayStatement, NumberNode, IdentifierNode, StringNode, FunctionDefNode, FunctionCallNode, IntentionNode, IfNode, RepeatNode, CompileNode, TestProductionNode, ContainerNode, TriggerContainerNode, ReadFileNode, WriteFileNode, FetchNode, SpawnNode, BindNode, MoveNode, CollisionNode, AttemptNode, QueryNode, ParseJsonNode, GetNode, ForEachNode, AsyncNode, LoadSecretsNode, GetSecretNode, PaintNode, ShapeNode, BreakpointNode, InputNode, CreateListNode, AppendListNode, ReturnNode, OnUpdateNode, RandomNode, AbsorbNode, ExecuteNativeNode
+
+class ReturnValue(Exception):
+    def __init__(self, value):
+        self.value = value
 
 class Environment:
     def __init__(self, outer=None):
         self.variables = {}
         self.outer = outer
 
-    def set(self, name, value):
-        if name in self.variables:
+    @property
+    def values(self):
+        return self.variables
+
+    @values.setter
+    def values(self, val):
+        self.variables = val
+
+    def set(self, name, value, is_local=False):
+        if is_local:
+            self.variables[name] = value
+        elif name in self.variables:
             self.variables[name] = value
         elif self.outer is not None and self.outer.has(name):
             self.outer.set(name, value)
@@ -44,28 +61,378 @@ class ContainerObj:
         self.input_body = input_body
 
 class Evaluator:
-    def __init__(self):
-        self.env = Environment()
+    def __init__(self, parser=None, env=None):
+        if isinstance(parser, Environment):
+            self.env = parser
+            self.parser = None
+        else:
+            self.parser = parser
+            self.env = env if env is not None else Environment()
+        self.call_depth = 0
+        self.MAX_DEPTH = 500
+        self.loaded_modules = set()
+        self.async_threads = []
+
+    def wait_for_async_threads(self, timeout=None):
+        """Wait for active background daemon threads to finish execution."""
+        for t in list(self.async_threads):
+            if t.is_alive():
+                t.join(timeout=timeout)
+        self.async_threads = [t for t in self.async_threads if t.is_alive()]
+
+    def wait_for_async(self, timeout=None):
+        self.wait_for_async_threads(timeout=timeout)
 
     def evaluate(self, node):
+        self.call_depth += 1
+        if self.call_depth > self.MAX_DEPTH:
+            raise Exception("Liquid Fatal Error: Maximum recursion depth exceeded (Infinite loop detected).")
+            
+        try:
+            return self._evaluate_inner(node)
+        finally:
+            self.call_depth -= 1
+            
+
+    def execute_WebGLNode(self, node):
+        print("[LIQUID ENGINE] WebGL & Web UI Execution Initiated. Compiling Enterprise CRM Suite...")
+        import webbrowser
+        import tempfile
+        import os
+        
+        html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💧 Liquid Matter | Enterprise CRM Engine</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --panel-bg: rgba(18, 26, 43, 0.75);
+            --panel-border: rgba(0, 240, 255, 0.15);
+            --accent-cyan: #00f0ff;
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-emerald: #10b981;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+        body { background: var(--bg-base); color: var(--text-main); height: 100vh; overflow: hidden; display: flex; }
+
+        #canvas-container { position: absolute; top:0; left:0; width:100%; height:100%; z-index:0; pointer-events:none; }
+
+        .app-shell { display: flex; width: 100vw; height: 100vh; z-index: 10; position: relative; }
+
+        /* Sidebar */
+        .sidebar { width: 260px; background: rgba(10, 15, 26, 0.85); backdrop-filter: blur(20px); border-right: 1px solid var(--panel-border); display: flex; flex-direction: column; padding: 24px 16px; }
+        .brand { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 800; color: #fff; margin-bottom: 32px; letter-spacing: -0.5px; }
+        .brand-badge { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue)); color: #000; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 900; }
+        .nav-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+        .nav-item { padding: 12px 16px; border-radius: 10px; color: var(--text-muted); font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 12px; }
+        .nav-item:hover, .nav-item.active { background: rgba(0, 240, 255, 0.1); color: var(--accent-cyan); border: 1px solid rgba(0, 240, 255, 0.2); }
+
+        /* Main Workspace */
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 32px; gap: 24px; backdrop-filter: blur(5px); }
+        .header { display: flex; justify-content: space-between; align-items: center; }
+        .title-group h1 { font-size: 28px; font-weight: 800; color: #fff; }
+        .title-group p { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+        .btn-primary { background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue)); color: #000; border: none; padding: 12px 20px; border-radius: 10px; font-weight: 700; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 0 20px rgba(0, 240, 255, 0.3); }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(0, 240, 255, 0.5); }
+
+        /* Metrics Row */
+        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .metric-card { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 16px; padding: 20px; backdrop-filter: blur(15px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .metric-card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: 600; }
+        .metric-value { font-size: 28px; font-weight: 800; color: #fff; margin: 8px 0; }
+        .metric-delta { font-size: 12px; font-weight: 600; color: var(--accent-emerald); display: flex; align-items: center; gap: 4px; }
+
+        /* Table Card */
+        .data-card { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 20px; padding: 24px; backdrop-filter: blur(20px); box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .search-input { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 10px 16px; border-radius: 10px; color: #fff; width: 280px; font-size: 14px; }
+        .search-input:focus { outline: none; border-color: var(--accent-cyan); }
+
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th { padding: 14px 16px; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        td { padding: 16px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.05); color: #e2e8f0; }
+        tr:hover td { background: rgba(255,255,255,0.02); }
+
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; display: inline-block; }
+        .badge-qualified { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+        .badge-proposal { background: rgba(139, 92, 246, 0.2); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.4); }
+        .badge-closed { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+
+        /* Floating Modal */
+        .modal-overlay { position: fixed; top:0; left:0; width:100vw; height:100vh; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); z-index: 100; display: none; justify-content: center; align-items: center; }
+        .modal { background: #0f172a; border: 1px solid var(--accent-cyan); padding: 32px; border-radius: 20px; width: 450px; box-shadow: 0 0 50px rgba(0, 240, 255, 0.2); }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+        .form-group input, .form-group select { width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #fff; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <span>💧 Liquid CRM</span>
+                <span class="brand-badge">v2.0</span>
+            </div>
+            <ul class="nav-list">
+                <li class="nav-item active">📊 Executive Dashboard</li>
+                <li class="nav-item">🏢 Enterprise Accounts</li>
+                <li class="nav-item">💼 Sales Pipeline</li>
+                <li class="nav-item">⚡ Native FFI Logic</li>
+                <li class="nav-item">⚙️ Engine Settings</li>
+            </ul>
+        </aside>
+
+        <main class="main-content">
+            <header class="header">
+                <div class="title-group">
+                    <h1>Enterprise Sales & Lead Pipeline</h1>
+                    <p>Powered by Pure Liquid Matter Native AST Architecture</p>
+                </div>
+                <button class="btn-primary" onclick="openModal()">+ Add New Lead</button>
+            </header>
+
+            <section class="metrics-grid">
+                <div class="metric-card">
+                    <h3>Total Pipeline Value</h3>
+                    <div class="metric-value" id="total-val">$890,000</div>
+                    <div class="metric-delta">↑ 24% vs last month</div>
+                </div>
+                <div class="metric-card">
+                    <h3>Active Deals</h3>
+                    <div class="metric-value">18 Accounts</div>
+                    <div class="metric-delta">High Conversion Rate</div>
+                </div>
+                <div class="metric-card">
+                    <h3>Average Deal Size</h3>
+                    <div class="metric-value">$296,666</div>
+                    <div class="metric-delta">↑ 12% Growth</div>
+                </div>
+                <div class="metric-card">
+                    <h3>Engine Status</h3>
+                    <div class="metric-value" style="color:var(--accent-cyan); font-size:20px;">⚡ Liquid Active</div>
+                    <div class="metric-delta">Zero Latency</div>
+                </div>
+            </section>
+
+            <section class="data-card">
+                <div class="card-header">
+                    <h2>Live Lead Database</h2>
+                    <input type="text" class="search-input" placeholder="Search accounts or deals..." oninput="filterTable(this.value)">
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Account / Lead Name</th>
+                            <th>Company</th>
+                            <th>Email Address</th>
+                            <th>Pipeline Status</th>
+                            <th>Deal Value ($)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="lead-table-body">
+                        <tr>
+                            <td><strong>Apex Cybernetics</strong></td>
+                            <td>Apex Ltd</td>
+                            <td>contact@apex.io</td>
+                            <td><span class="badge badge-qualified">Qualified</span></td>
+                            <td>$250,000</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Vanguard Security</strong></td>
+                            <td>Vanguard Corp</td>
+                            <td>sales@vanguard.sec</td>
+                            <td><span class="badge badge-proposal">Proposal</span></td>
+                            <td>$140,000</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Aetherium Cloud</strong></td>
+                            <td>Aetherium Systems</td>
+                            <td>devs@aetherium.cloud</td>
+                            <td><span class="badge badge-closed">Closed Won</span></td>
+                            <td>$500,000</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal Dialog -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <h2 style="margin-bottom: 20px; color:#fff;">Add New Enterprise Account</h2>
+            <div class="form-group">
+                <label>Account Name</label>
+                <input type="text" id="m-name" placeholder="e.g. Cyberdyne Systems">
+            </div>
+            <div class="form-group">
+                <label>Company</label>
+                <input type="text" id="m-company" placeholder="e.g. Cyberdyne Inc">
+            </div>
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" id="m-email" placeholder="client@cyberdyne.io">
+            </div>
+            <div class="form-group">
+                <label>Deal Value ($)</label>
+                <input type="number" id="m-value" placeholder="150000">
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
+                <button onclick="closeModal()" style="padding:10px 16px; background:transparent; border:1px solid #475569; color:#fff; border-radius:8px; cursor:pointer;">Cancel</button>
+                <button onclick="addLead()" class="btn-primary">Save Lead</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Three.js Ambient Network Layer -->
+    <script>
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        container.appendChild(renderer.domElement);
+
+        // Nodes
+        const particlesGeometry = new THREE.BufferGeometry();
+        const count = 200;
+        const positions = new Float32Array(count * 3);
+        for(let i=0; i<count*3; i++) {
+            positions[i] = (Math.random() - 0.5) * 30;
+        }
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const particlesMaterial = new THREE.PointsMaterial({ size: 0.15, color: 0x00f0ff, transparent: true, opacity: 0.6 });
+        const particles = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particles);
+
+        camera.position.z = 10;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            particles.rotation.y += 0.001;
+            particles.rotation.x += 0.0005;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // UI Logic Controls
+        function openModal() { document.getElementById('modal-overlay').style.display = 'flex'; }
+        function closeModal() { document.getElementById('modal-overlay').style.display = 'none'; }
+        
+        function addLead() {
+            const name = document.getElementById('m-name').value || 'New Client';
+            const company = document.getElementById('m-company').value || 'Corp';
+            const email = document.getElementById('m-email').value || 'info@domain.com';
+            const value = parseFloat(document.getElementById('m-value').value || 100000);
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td><strong>${name}</strong></td><td>${company}</td><td>${email}</td><td><span class="badge badge-qualified">Qualified</span></td><td>$${value.toLocaleString()}</td>`;
+            document.getElementById('lead-table-body').appendChild(tr);
+
+            closeModal();
+        }
+
+        function filterTable(query) {
+            const rows = document.querySelectorAll('#lead-table-body tr');
+            rows.forEach(r => {
+                const text = r.innerText.toLowerCase();
+                r.style.display = text.includes(query.toLowerCase()) ? '' : 'none';
+            });
+        }
+    </script>
+</body>
+</html>'''
+
+        temp_dir = tempfile.gettempdir()
+        file_path = os.path.join(temp_dir, 'liquid_matter_crm_app.html')
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+            
+        print("[LIQUID ENGINE] Enterprise CRM Application Compiled -> " + file_path)
+        webbrowser.open('file://' + file_path)
+
+    def _evaluate_inner(self, node):
         if isinstance(node, list):
             for statement in node:
                 self.evaluate(statement)
                 
-        elif isinstance(node, SetStatement):
-            var_name = node.identifier.value
-            if isinstance(node.value, NumberNode):
-                val = float(node.value.value)
-            elif isinstance(node.value, StringNode):
-                val = node.value.value
-            elif isinstance(node.value, RandomNode):
-                import random
-                min_v = float(node.value.min_val.value)
-                max_v = float(node.value.max_val.value)
-                val = random.uniform(min_v, max_v)
+        elif isinstance(node, NumberNode):
+            return node.value
+
+        elif isinstance(node, StringNode):
+            return node.value
+
+        elif isinstance(node, IdentifierNode):
+            return self.env.get(node.value)
+
+        elif isinstance(node, BinaryOpNode):
+            if node.op == 'and':
+                left_val = self.evaluate(node.left)
+                if not left_val:
+                    return left_val
+                return self.evaluate(node.right)
+            elif node.op == 'or':
+                left_val = self.evaluate(node.left)
+                if left_val:
+                    return left_val
+                return self.evaluate(node.right)
+            
+            left_val = self.evaluate(node.left)
+            right_val = self.evaluate(node.right)
+            
+            if node.op == '+': return left_val + right_val
+            elif node.op == '-': return left_val - right_val
+            elif node.op == '*': return left_val * right_val
+            elif node.op == '/':
+                if right_val == 0:
+                    raise Exception("Liquid Error: Division by zero is impossible. The engine has blocked this.")
+                return left_val / right_val
+            elif node.op in ('==', 'is'): return left_val == right_val
+            elif node.op in ('!=', 'is not'): return left_val != right_val
+            elif node.op == '>': return left_val > right_val
+            elif node.op == '<': return left_val < right_val
+            elif node.op == '>=': return left_val >= right_val
+            elif node.op == '<=': return left_val <= right_val
             else:
-                val = self.env.get(node.value.value)
-            self.env.set(var_name, val)
+                raise Exception(f"Liquid Error: Unknown binary operator '{node.op}'")
+
+        elif isinstance(node, UnaryOpNode):
+            val = self.evaluate(node.expr)
+            if node.op == 'not':
+                return not val
+            elif node.op == '-':
+                return - val
+            else:
+                raise Exception(f"Liquid Error: Unknown unary operator '{node.op}'")
+
+        elif isinstance(node, CreateDictionaryNode):
+            self.env.set(node.target.value, {})
+
+        elif isinstance(node, SetDictKeyNode):
+            d = self.env.get(node.dict_name.value)
+            if not isinstance(d, dict):
+                raise Exception(f"Liquid Error: '{node.dict_name.value}' is not a dictionary.")
+            key_val = self.evaluate(node.key) if isinstance(node.key, AST) else node.key.value
+            val_val = self.evaluate(node.value) if isinstance(node.value, AST) else node.value.value
+            d[key_val] = val_val
+
+        elif isinstance(node, SetStatement):
+            var_name = node.target.value
+            val = self.evaluate(node.value) if isinstance(node.value, AST) else node.value
+            if getattr(node, 'is_local', False):
+                self.env.variables[var_name] = val
+            else:
+                self.env.set(var_name, val)
             
         elif isinstance(node, AddStatement):
             var_name = node.identifier.value
@@ -75,7 +442,10 @@ class Evaluator:
                 amount = self.env.get(node.value.value)
                 
             current_val = self.env.get(var_name)
-            self.env.set(var_name, current_val + amount)
+            try:
+                self.env.set(var_name, current_val + amount)
+            except TypeError:
+                raise Exception(f"Liquid Error: Cannot add '{amount}' to '{current_val}'. Data type mismatch.")
             
         elif isinstance(node, SubtractStatement):
             var_name = node.identifier.value
@@ -85,15 +455,26 @@ class Evaluator:
                 amount = self.env.get(node.value.value)
                 
             current_val = self.env.get(var_name)
-            self.env.set(var_name, current_val - amount)
+            try:
+                self.env.set(var_name, current_val - amount)
+            except TypeError:
+                raise Exception(f"Liquid Error: Cannot subtract '{amount}' from '{current_val}'. Data type mismatch.")
             
         elif isinstance(node, DisplayStatement):
-            target = node.target
-            if isinstance(target, NumberNode) or isinstance(target, StringNode):
-                print(target.value)
-            elif isinstance(target, IdentifierNode):
-                val = self.env.get(target.value)
-                print(val)
+            val = self.evaluate(node.target) if isinstance(node.target, AST) else node.target
+            
+            # Advanced string interpolation for V2
+            if isinstance(val, str) and '{' in val and '}' in val:
+                def repl(match):
+                    var_name = match.group(1)
+                    try:
+                        found = self.env.get(var_name)
+                        return str(found)
+                    except:
+                        return match.group(0)
+                val = re.sub(r'\{([a-zA-Z0-9_]+)\}', repl, val)
+                
+            print(val)
                 
         elif isinstance(node, FunctionDefNode):
             self.env.set(node.name.value, node)
@@ -120,13 +501,69 @@ class Evaluator:
             # Save old env, swap to new, execute, restore
             old_env = self.env
             self.env = local_env
-            for statement in func_def.body:
-                self.evaluate(statement)
+            ret_val = None
+            try:
+                for statement in func_def.body:
+                    self.evaluate(statement)
+            except ReturnValue as ret:
+                ret_val = ret.value
             self.env = old_env
+            return ret_val
             
+        elif type(node).__name__ == 'WebGLNode':
+            return self.execute_WebGLNode(node)
+        elif isinstance(node, AbsorbNode):
+            import os
+            from lexer import Lexer
+            from parser import Parser
+            
+            target_raw = node.target_file.value if hasattr(node.target_file, 'value') else str(node.target_file)
+            
+            candidates = [target_raw]
+            if not target_raw.endswith('.lm'):
+                candidates.append(target_raw + '.lm')
+            
+            modules_dir_candidate = os.path.join('modules', target_raw)
+            candidates.append(modules_dir_candidate)
+            if not target_raw.endswith('.lm'):
+                candidates.append(modules_dir_candidate + '.lm')
+
+            resolved_path = None
+            for candidate in candidates:
+                if os.path.exists(candidate):
+                    resolved_path = os.path.abspath(candidate)
+                    break
+
+            if not resolved_path:
+                raise Exception(f"Liquid Error: Cannot absorb '{target_raw}'. File not found in local or ./modules/ directory.")
+
+            if resolved_path in self.loaded_modules:
+                return
+
+            self.loaded_modules.add(resolved_path)
+
+            with open(resolved_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+
+            lexer = Lexer(code)
+            parser = Parser(lexer)
+            ast = parser.parse()
+
+            # Evaluate absorbed file in CURRENT environment!
+            self.evaluate(ast)
+            
+        elif isinstance(node, ExecuteNativeNode):
+            code_str = node.code_string.value
+            try:
+                # Provide self.env.variables as both globals and locals so native functions don't lose scope!
+                exec(code_str, self.env.variables, self.env.variables)
+            except Exception as e:
+                raise Exception(f"Liquid Native Error: {str(e)}")
+                
         elif isinstance(node, IntentionNode):
-            intention = node.intention.value
-            if intention == "Start Game Engine":
+            raw = getattr(node, 'target', getattr(node, 'intention', ''))
+            intention = raw.value.lower() if hasattr(raw, 'value') else str(raw).lower()
+            if intention == "start game engine":
                 import turtle
                 self.screen = turtle.Screen()
                 self.screen.title("Liquid Matter 2D Engine")
@@ -201,22 +638,28 @@ class Evaluator:
                 print(f"[WARNING] Unknown Intention: '{node.intention.value}'.")
 
         elif isinstance(node, IfNode):
-            left_val = self.env.get(node.left.value)
-            
-            if isinstance(node.right, NumberNode) or isinstance(node.right, StringNode):
-                right_val = node.right.value
+            if hasattr(node, 'condition') and node.condition is not None:
+                cond_val = bool(self.evaluate(node.condition))
             else:
-                right_val = self.env.get(node.right.value)
-                
-            if left_val == right_val:
+                left_val = self.evaluate(node.left) if isinstance(node.left, AST) else self.env.get(node.left.value)
+                right_val = self.evaluate(node.right) if isinstance(node.right, AST) else (node.right.value if hasattr(node.right, 'value') else self.env.get(node.right.value))
+                if node.operator == "==": cond_val = (left_val == right_val)
+                elif node.operator == ">": cond_val = (left_val > right_val)
+                elif node.operator == "<": cond_val = (left_val < right_val)
+                elif node.operator == "!=": cond_val = (left_val != right_val)
+                elif node.operator == ">=": cond_val = (left_val >= right_val)
+                elif node.operator == "<=": cond_val = (left_val <= right_val)
+                else: cond_val = False
+
+            if cond_val:
                 for statement in node.body:
+                    self.evaluate(statement)
+            elif node.else_body:
+                for statement in node.else_body:
                     self.evaluate(statement)
                     
         elif isinstance(node, RepeatNode):
-            if isinstance(node.count, NumberNode):
-                times = node.count.value
-            else:
-                times = self.env.get(node.count.value)
+            times = int(self.evaluate(node.count)) if isinstance(node.count, AST) else (node.count.value if hasattr(node.count, 'value') else self.env.get(node.count.value))
                 
             for _ in range(times):
                 for statement in node.body:
@@ -270,9 +713,9 @@ class Evaluator:
             self.env = old_env
             
         elif isinstance(node, ReadFileNode):
-            filepath = node.filepath.value
+            filepath = os.path.abspath(node.filepath.value)
             if os.path.exists(filepath):
-                with open(filepath, 'r') as f:
+                with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
                 self.env.set(node.target.value, content)
             else:
@@ -280,14 +723,16 @@ class Evaluator:
                 self.env.set(node.target.value, "")
                 
         elif isinstance(node, WriteFileNode):
+            filepath = os.path.abspath(node.filepath.value)
             if isinstance(node.content, StringNode):
                 val = node.content.value
             else:
                 val = str(self.env.get(node.content.value))
                 
-            with open(node.filepath.value, 'w') as f:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(val)
-            print(f"[SUCCESS] Wrote data to {node.filepath.value}")
+            print(f"[SUCCESS] Wrote data to {filepath}")
             
         elif isinstance(node, FetchNode):
             url = node.url.value
@@ -495,30 +940,35 @@ class Evaluator:
                 
         elif isinstance(node, MultiplyStatement):
             current = self.env.get(node.target.value)
-            val = node.value.value if hasattr(node.value, 'value') else self.env.get(node.value.value)
-            self.env.set(node.target.value, current * val)
+            if isinstance(node.value, IdentifierNode):
+                val = self.env.get(node.value.value)
+            elif hasattr(node.value, 'value'):
+                val = node.value.value
+            else:
+                val = node.value
+            try:
+                self.env.set(node.target.value, float(current) * float(val))
+            except TypeError:
+                raise Exception(f"Liquid Error: Cannot multiply '{current}' by '{val}'. Data type mismatch.")
             
         elif isinstance(node, DivideStatement):
             current = self.env.get(node.target.value)
-            val = node.value.value if hasattr(node.value, 'value') else self.env.get(node.value.value)
-            self.env.set(node.target.value, current / val)
+            if isinstance(node.value, IdentifierNode):
+                val = self.env.get(node.value.value)
+            elif hasattr(node.value, 'value'):
+                val = node.value.value
+            else:
+                val = node.value
+            try:
+                self.env.set(node.target.value, float(current) / float(val))
+            except TypeError:
+                raise Exception(f"Liquid Error: Cannot divide '{current}' by '{val}'. Data type mismatch.")
+            except ZeroDivisionError:
+                raise Exception(f"Liquid Error: Division by zero is impossible. The engine has blocked this.")
 
-        elif isinstance(node, DisplayStatement):
-            val = self.env.get(node.target.value) if isinstance(node.target, IdentifierNode) else node.target.value
-            
-            # Simple string interpolation for V2!
-            if isinstance(val, str) and '{' in val and '}' in val:
-                def repl(match):
-                    var_name = match.group(1)
-                    found = self.env.get(var_name)
-                    return str(found) if found is not None else match.group(0)
-                val = re.sub(r'\{([a-zA-Z0-9_]+)\}', repl, val)
-                
-            print(val)
-                
         elif isinstance(node, GetNode):
             source_obj = self.env.get(node.source.value)
-            key_val = node.key.value if hasattr(node.key, 'value') else self.env.get(node.key.value)
+            key_val = self.evaluate(node.key) if isinstance(node.key, AST) else (node.key.value if hasattr(node.key, 'value') else self.env.get(node.key.value))
             try:
                 result = source_obj[key_val]
                 self.env.set(node.target.value, result)
@@ -545,18 +995,21 @@ class Evaluator:
                 func_def = self.env.get(func_name)
                 if isinstance(func_def, FunctionDefNode):
                     def run_async():
-                        old_env = self.env
-                        self.env = Environment(outer=self.env)
+                        import copy
+                        # Create a shallow copy of the evaluator to prevent race conditions 
+                        # where the background thread clobbers the main thread's environment.
+                        thread_evaluator = copy.copy(self)
+                        thread_evaluator.env = Environment(outer=self.env)
                         for stmt in func_def.body:
                             try:
-                                self.evaluate(stmt)
+                                thread_evaluator.evaluate(stmt)
                             except Exception as e:
                                 print(f"[ERROR in async task '{func_name}']: {e}")
-                        self.env = old_env
                     
                     t = threading.Thread(target=run_async, daemon=True)
+                    self.async_threads.append(t)
                     t.start()
-                    print(f"[SUCCESS] Started async task '{func_name}' in the background.")
+                    print(f"[SUCCESS] Started async task '{func_name}' in the background (Thread Safe).")
                 else:
                     print(f"[ERROR] '{func_name}' is not a defined action.")
             except Exception as e:
@@ -674,4 +1127,4 @@ class Evaluator:
                 
         elif isinstance(node, ReturnNode):
             val = node.value.value if not isinstance(node.value, IdentifierNode) else self.env.get(node.value.value)
-            print(f"[RETURN] {val}") # Simple return intercept representation for V2 showcase
+            raise ReturnValue(val)

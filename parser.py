@@ -4,6 +4,12 @@ from lexer import TokenType
 class AST:
     pass
 
+class WebGLNode(AST):
+    def __init__(self, raw_tokens):
+        self.raw_tokens = raw_tokens
+
+    pass
+
 class SetStatement(AST):
     def __init__(self, target, value, is_local=False):
         self.target = target
@@ -57,11 +63,35 @@ class IntentionNode(AST):
     def __init__(self, target):
         self.target = target
 
-class IfNode(AST):
-    def __init__(self, left, right, body):
+class BinaryOpNode(AST):
+    def __init__(self, left, op, right):
         self.left = left
+        self.op = op
         self.right = right
-        self.body = body
+
+class UnaryOpNode(AST):
+    def __init__(self, op, expr):
+        self.op = op
+        self.expr = expr
+
+class CreateDictionaryNode(AST):
+    def __init__(self, target):
+        self.target = target
+
+class SetDictKeyNode(AST):
+    def __init__(self, dict_name, key, value):
+        self.dict_name = dict_name
+        self.key = key
+        self.value = value
+
+class IfNode(AST):
+    def __init__(self, condition=None, body=None, else_body=None, left=None, operator=None, right=None):
+        self.condition = condition
+        self.body = body if body is not None else []
+        self.else_body = else_body
+        self.left = left
+        self.operator = operator
+        self.right = right
 
 class RepeatNode(AST):
     def __init__(self, count, body):
@@ -174,6 +204,14 @@ class ShapeNode(AST):
 class BreakpointNode(AST):
     pass
 
+class AbsorbNode(AST):
+    def __init__(self, target_file):
+        self.target_file = target_file
+
+class ExecuteNativeNode(AST):
+    def __init__(self, code_string):
+        self.code_string = code_string
+
 class InputNode(AST):
     def __init__(self, prompt, target):
         self.prompt = prompt
@@ -211,16 +249,170 @@ class Parser:
         self.lexer = lexer
         self.current_token = self.lexer.get_next_token()
 
+    def format_error(self, message, token=None):
+        if token is None:
+            token = self.current_token
+        if hasattr(self.lexer, 'format_error') and hasattr(token, 'line') and hasattr(token, 'column'):
+            return self.lexer.format_error(message, token.line, token.column)
+        return message
+
     def eat(self, token_type):
         if self.current_token.type == token_type:
             self.current_token = self.lexer.get_next_token()
         else:
-            raise Exception(f"Liquid Matter expected {token_type} but found {self.current_token.type}")
+            msg = f"Liquid Matter expected {token_type} but found {self.current_token.type}"
+            raise Exception(self.format_error(msg, self.current_token))
+
+    def parse_expression(self):
+        return self.parse_or()
+
+    def parse_or(self):
+        left = self.parse_and()
+        while self.current_token.type == TokenType.OR:
+            op = self.current_token.value
+            self.eat(TokenType.OR)
+            right = self.parse_and()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_and(self):
+        left = self.parse_not()
+        while self.current_token.type == TokenType.AND:
+            op = self.current_token.value
+            self.eat(TokenType.AND)
+            right = self.parse_not()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_not(self):
+        if self.current_token.type == TokenType.NOT:
+            self.eat(TokenType.NOT)
+            expr = self.parse_not()
+            return UnaryOpNode('not', expr)
+        return self.parse_comparison()
+
+    def parse_comparison(self):
+        left = self.parse_add_sub()
+        
+        if self.current_token.type in (TokenType.EQ, TokenType.NEQ, TokenType.GT, TokenType.LT, TokenType.GTE, TokenType.LTE):
+            op = self.current_token.value
+            self.eat(self.current_token.type)
+            right = self.parse_add_sub()
+            return BinaryOpNode(left, op, right)
+        elif self.current_token.type == TokenType.IS:
+            self.eat(TokenType.IS)
+            if self.current_token.type == TokenType.GREATER:
+                self.eat(TokenType.GREATER)
+                self.eat(TokenType.THAN)
+                op = ">"
+            elif self.current_token.type == TokenType.LESS:
+                self.eat(TokenType.LESS)
+                self.eat(TokenType.THAN)
+                op = "<"
+            elif self.current_token.type == TokenType.NOT:
+                self.eat(TokenType.NOT)
+                op = "!="
+            else:
+                op = "=="
+            right = self.parse_add_sub()
+            return BinaryOpNode(left, op, right)
+        elif self.current_token.type == TokenType.GREATER:
+            self.eat(TokenType.GREATER)
+            self.eat(TokenType.THAN)
+            op = ">"
+            right = self.parse_add_sub()
+            return BinaryOpNode(left, op, right)
+        elif self.current_token.type == TokenType.LESS:
+            self.eat(TokenType.LESS)
+            self.eat(TokenType.THAN)
+            op = "<"
+            right = self.parse_add_sub()
+            return BinaryOpNode(left, op, right)
+            
+        return left
+
+    def parse_add_sub(self):
+        left = self.parse_mul_div()
+        while self.current_token.type in (TokenType.PLUS, TokenType.MINUS):
+            op = self.current_token.value
+            self.eat(self.current_token.type)
+            right = self.parse_mul_div()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_mul_div(self):
+        left = self.parse_unary()
+        while self.current_token.type in (TokenType.STAR, TokenType.SLASH):
+            op = self.current_token.value
+            self.eat(self.current_token.type)
+            right = self.parse_unary()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_unary(self):
+        if self.current_token.type == TokenType.MINUS:
+            self.eat(TokenType.MINUS)
+            expr = self.parse_unary()
+            return UnaryOpNode('-', expr)
+        return self.parse_primary()
+
+    def parse_primary(self):
+        if self.current_token.type == TokenType.NUMBER:
+            val = self.current_token.value
+            self.eat(TokenType.NUMBER)
+            return NumberNode(val)
+        elif self.current_token.type == TokenType.STRING:
+            val = self.current_token.value
+            self.eat(TokenType.STRING)
+            return StringNode(val)
+        elif self.current_token.type == TokenType.LPAREN:
+            self.eat(TokenType.LPAREN)
+            expr = self.parse_expression()
+            self.eat(TokenType.RPAREN)
+            return expr
+        elif self.current_token.type == TokenType.RANDOM:
+            self.eat(TokenType.RANDOM)
+            self.eat(TokenType.BETWEEN)
+            min_val = self.parse_expression()
+            self.eat(TokenType.AND)
+            max_val = self.parse_expression()
+            return RandomNode(min_val, max_val)
+        elif self.current_token.type == TokenType.PERFORM:
+            return self.statement()
+        elif self.current_token.type == TokenType.GET:
+            return self.statement()
+        elif self.current_token.type == TokenType.IDENTIFIER:
+            val = self.current_token.value
+            self.eat(TokenType.IDENTIFIER)
+            return IdentifierNode(val)
+        else:
+            msg = f"Liquid Matter parser expected expression, found: {self.current_token.type} ('{self.current_token.value}')"
+            raise Exception(self.format_error(msg, self.current_token))
 
     def statement(self):
-        # e.g., "set x to 10" or "set local x to 10"
+
+        if self.current_token.type == TokenType.INITIATE:
+            self.eat(TokenType.INITIATE)
+            tokens = []
+            while self.current_token.type != TokenType.EOF:
+                tokens.append(str(self.current_token.value))
+                self.current_token = self.lexer.get_next_token()
+            return WebGLNode(tokens)
+
+        # e.g., "set x to 10" or "set key 'age' of user to 30"
         if self.current_token.type == TokenType.SET:
             self.eat(TokenType.SET)
+            
+            if self.current_token.type == TokenType.KEY:
+                self.eat(TokenType.KEY)
+                key_expr = self.parse_expression()
+                self.eat(TokenType.OF)
+                dict_name = self.current_token.value
+                self.eat(TokenType.IDENTIFIER)
+                self.eat(TokenType.TO)
+                val_expr = self.parse_expression()
+                return SetDictKeyNode(IdentifierNode(dict_name), key_expr, val_expr)
+
             is_local = False
             if self.current_token.type == TokenType.LOCAL:
                 self.eat(TokenType.LOCAL)
@@ -230,52 +422,28 @@ class Parser:
             self.eat(TokenType.IDENTIFIER)
             self.eat(TokenType.TO)
             
-            if self.current_token.type == TokenType.NUMBER:
-                value = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            elif self.current_token.type == TokenType.STRING:
-                value = StringNode(self.current_token.value)
-                self.eat(TokenType.STRING)
-            elif self.current_token.type == TokenType.RANDOM:
-                self.eat(TokenType.RANDOM)
-                self.eat(TokenType.BETWEEN)
-                min_val = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-                self.eat(TokenType.AND)
-                max_val = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-                value = RandomNode(min_val, max_val)
-            else:
-                value = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
-                
+            value = self.parse_expression()
             return SetStatement(IdentifierNode(target), value, is_local)
             
-        # e.g., "add 5 to x"
+        # e.g., "add 5 to x" or "add score to total"
         elif self.current_token.type == TokenType.ADD:
             self.eat(TokenType.ADD)
-            amount = self.current_token.value
-            self.eat(TokenType.NUMBER)
+            if self.current_token.type == TokenType.NUMBER:
+                amount = NumberNode(self.current_token.value)
+                self.eat(TokenType.NUMBER)
+            else:
+                amount = IdentifierNode(self.current_token.value)
+                self.eat(TokenType.IDENTIFIER)
             self.eat(TokenType.TO)
             var_name = self.current_token.value
             self.eat(TokenType.IDENTIFIER)
-            return AddStatement(NumberNode(amount), IdentifierNode(var_name))
+            return AddStatement(amount, IdentifierNode(var_name))
 
         # e.g., "display x"
         elif self.current_token.type == TokenType.DISPLAY:
             self.eat(TokenType.DISPLAY)
-            if self.current_token.type == TokenType.NUMBER:
-                val = self.current_token.value
-                self.eat(TokenType.NUMBER)
-                return DisplayStatement(NumberNode(val))
-            elif self.current_token.type == TokenType.STRING:
-                val = self.current_token.value
-                self.eat(TokenType.STRING)
-                return DisplayStatement(StringNode(val))
-            else:
-                val = self.current_token.value
-                self.eat(TokenType.IDENTIFIER)
-                return DisplayStatement(IdentifierNode(val))
+            expr = self.parse_expression()
+            return DisplayStatement(expr)
                 
         # e.g., "define action greet with name"
         elif self.current_token.type == TokenType.DEFINE:
@@ -290,6 +458,8 @@ class Parser:
                 while self.current_token.type == TokenType.IDENTIFIER:
                     params.append(self.current_token.value)
                     self.eat(TokenType.IDENTIFIER)
+                    if self.current_token.type == TokenType.AND:
+                        self.eat(TokenType.AND)
             
             body = []
             while self.current_token.type != TokenType.END and self.current_token.type != TokenType.EOF:
@@ -317,6 +487,8 @@ class Parser:
                     else:
                         args.append(IdentifierNode(self.current_token.value))
                         self.eat(TokenType.IDENTIFIER)
+                    if self.current_token.type == TokenType.AND:
+                        self.eat(TokenType.AND)
                         
             return FunctionCallNode(IdentifierNode(func_name), args)
             
@@ -327,44 +499,30 @@ class Parser:
             self.eat(TokenType.STRING)
             return IntentionNode(target)
             
-        # e.g., "if power is 10 then"
+        # e.g., "if power is 10 then", "if x > 5 and y < 10 then"
         elif self.current_token.type == TokenType.IF:
             self.eat(TokenType.IF)
-            left = self.current_token.value
-            self.eat(TokenType.IDENTIFIER)
-            
-            self.eat(TokenType.IS)
-            
-            if self.current_token.type == TokenType.NUMBER:
-                right = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            elif self.current_token.type == TokenType.STRING:
-                right = StringNode(self.current_token.value)
-                self.eat(TokenType.STRING)
-            else:
-                right = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
-                
+            condition = self.parse_expression()
             self.eat(TokenType.THEN)
             
             body = []
-            while self.current_token.type != TokenType.END and self.current_token.type != TokenType.EOF:
+            while self.current_token.type not in (TokenType.END, TokenType.ELSE, TokenType.EOF):
                 body.append(self.statement())
                 
+            else_body = None
+            if self.current_token.type == TokenType.ELSE:
+                self.eat(TokenType.ELSE)
+                else_body = []
+                while self.current_token.type not in (TokenType.END, TokenType.EOF):
+                    else_body.append(self.statement())
+                
             self.eat(TokenType.END)
-            return IfNode(IdentifierNode(left), right, body)
+            return IfNode(condition=condition, body=body, else_body=else_body)
             
         # e.g., "repeat 5 times"
         elif self.current_token.type == TokenType.REPEAT:
             self.eat(TokenType.REPEAT)
-            
-            if self.current_token.type == TokenType.NUMBER:
-                count = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            else:
-                count = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
-                
+            count = self.parse_expression()
             self.eat(TokenType.TIMES)
             
             body = []
@@ -513,7 +671,8 @@ class Parser:
             if self.current_token.type in (TokenType.UP, TokenType.DOWN, TokenType.LEFT, TokenType.RIGHT):
                 self.eat(self.current_token.type)
             else:
-                raise Exception("Liquid Matter expects a direction (up, down, left, right)")
+                msg = f"Liquid Matter expects a direction (up, down, left, right), found '{self.current_token.value}'"
+                raise Exception(self.format_error(msg, self.current_token))
             return MoveNode(IdentifierNode(target), StringNode(dir_val))
             
         # e.g., "subtract 10 from health"
@@ -558,40 +717,38 @@ class Parser:
                 self.eat(TokenType.IDENTIFIER)
             return DivideStatement(IdentifierNode(target), value)
             
-        # e.g. "create list roster containing 'A', 'B'"
+        # e.g. "create dictionary user" or "create list roster containing 'A', 'B'"
         elif self.current_token.type == TokenType.CREATE:
             self.eat(TokenType.CREATE)
-            self.eat(TokenType.LIST)
-            target = self.current_token.value
-            self.eat(TokenType.IDENTIFIER)
-            self.eat(TokenType.CONTAINING)
-            items = []
-            while self.current_token.type in (TokenType.STRING, TokenType.NUMBER, TokenType.IDENTIFIER):
-                if self.current_token.type == TokenType.STRING:
-                    items.append(StringNode(self.current_token.value))
-                    self.eat(TokenType.STRING)
-                elif self.current_token.type == TokenType.NUMBER:
-                    items.append(NumberNode(self.current_token.value))
-                    self.eat(TokenType.NUMBER)
-                elif self.current_token.type == TokenType.IDENTIFIER:
-                    items.append(IdentifierNode(self.current_token.value))
-                    self.eat(TokenType.IDENTIFIER)
-                if self.current_token.type == TokenType.COMMA:
-                    self.eat(TokenType.COMMA)
-            return CreateListNode(IdentifierNode(target), items)
+            if self.current_token.type == TokenType.DICTIONARY:
+                self.eat(TokenType.DICTIONARY)
+                target = self.current_token.value
+                self.eat(TokenType.IDENTIFIER)
+                return CreateDictionaryNode(IdentifierNode(target))
+            elif self.current_token.type == TokenType.LIST:
+                self.eat(TokenType.LIST)
+                target = self.current_token.value
+                self.eat(TokenType.IDENTIFIER)
+                self.eat(TokenType.CONTAINING)
+                items = []
+                while self.current_token.type in (TokenType.STRING, TokenType.NUMBER, TokenType.IDENTIFIER):
+                    if self.current_token.type == TokenType.STRING:
+                        items.append(StringNode(self.current_token.value))
+                        self.eat(TokenType.STRING)
+                    elif self.current_token.type == TokenType.NUMBER:
+                        items.append(NumberNode(self.current_token.value))
+                        self.eat(TokenType.NUMBER)
+                    elif self.current_token.type == TokenType.IDENTIFIER:
+                        items.append(IdentifierNode(self.current_token.value))
+                        self.eat(TokenType.IDENTIFIER)
+                    if self.current_token.type == TokenType.COMMA:
+                        self.eat(TokenType.COMMA)
+                return CreateListNode(IdentifierNode(target), items)
             
         # e.g. "append 'A' to roster"
         elif self.current_token.type == TokenType.APPEND:
             self.eat(TokenType.APPEND)
-            if self.current_token.type == TokenType.STRING:
-                val = StringNode(self.current_token.value)
-                self.eat(TokenType.STRING)
-            elif self.current_token.type == TokenType.NUMBER:
-                val = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            else:
-                val = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
+            val = self.parse_expression()
             self.eat(TokenType.TO)
             target = self.current_token.value
             self.eat(TokenType.IDENTIFIER)
@@ -600,15 +757,7 @@ class Parser:
         # e.g., "return 50"
         elif self.current_token.type == TokenType.RETURN:
             self.eat(TokenType.RETURN)
-            if self.current_token.type == TokenType.NUMBER:
-                val = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            elif self.current_token.type == TokenType.STRING:
-                val = StringNode(self.current_token.value)
-                self.eat(TokenType.STRING)
-            else:
-                val = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
+            val = self.parse_expression()
             return ReturnNode(val)
             
         # e.g., "on update perform tick"
@@ -685,16 +834,10 @@ class Parser:
                 self.eat(TokenType.IDENTIFIER)
                 return GetSecretNode(secret_name, IdentifierNode(target))
             
-            if self.current_token.type == TokenType.STRING:
-                key = StringNode(self.current_token.value)
-                self.eat(TokenType.STRING)
-            elif self.current_token.type == TokenType.NUMBER:
-                key = NumberNode(self.current_token.value)
-                self.eat(TokenType.NUMBER)
-            else:
-                key = IdentifierNode(self.current_token.value)
-                self.eat(TokenType.IDENTIFIER)
+            if self.current_token.type == TokenType.KEY:
+                self.eat(TokenType.KEY)
                 
+            key = self.parse_expression()
             self.eat(TokenType.FROM)
             source = self.current_token.value
             self.eat(TokenType.IDENTIFIER)
@@ -748,6 +891,25 @@ class Parser:
             self.eat(TokenType.BREAKPOINT)
             return BreakpointNode()
             
+        elif self.current_token.type == TokenType.ABSORB:
+            self.eat(TokenType.ABSORB)
+            if self.current_token.type == TokenType.STRING:
+                target = StringNode(self.current_token.value)
+                self.eat(TokenType.STRING)
+            elif self.current_token.type == TokenType.IDENTIFIER:
+                target = StringNode(self.current_token.value)
+                self.eat(TokenType.IDENTIFIER)
+            else:
+                target = StringNode(self.current_token.value)
+                self.eat(self.current_token.type)
+            return AbsorbNode(target)
+            
+        elif self.current_token.type == TokenType.NATIVE:
+            self.eat(TokenType.NATIVE)
+            code = StringNode(self.current_token.value)
+            self.eat(TokenType.STRING)
+            return ExecuteNativeNode(code)
+            
         # e.g. "input 'Enter name: ' into username" or "input 'Age' to age"
         elif self.current_token.type == TokenType.INPUT:
             self.eat(TokenType.INPUT)
@@ -761,7 +923,8 @@ class Parser:
             self.eat(TokenType.IDENTIFIER)
             return InputNode(StringNode(prompt_str), IdentifierNode(target))
 
-        raise Exception(f"Liquid Matter didn't recognize the statement starting with: {self.current_token.value}")
+        msg = f"Liquid Matter didn't recognize the statement starting with: {self.current_token.value}"
+        raise Exception(self.format_error(msg, self.current_token))
 
     def parse(self):
         statements = []
